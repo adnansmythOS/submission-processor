@@ -62,58 +62,71 @@ class GoogleAPIManager:
             return self._creds
             
         creds = None
-        print(f"🔍 Checking for existing token at: {self.token_path}")
         
-        # Load existing token
-        if os.path.exists(self.token_path):
-            print("✅ Found existing token file, loading...")
-            creds = Credentials.from_authorized_user_file(self.token_path, self.SCOPES)
-        else:
-            print("❌ No existing token file found")
+        # Try to load from Streamlit secrets first (production)
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'GOOGLE_TOKEN_JSON' in st.secrets:
+                print("🔍 Loading token from Streamlit secrets...")
+                token_data = st.secrets['GOOGLE_TOKEN_JSON']
+                if isinstance(token_data, str):
+                    import json
+                    token_data = json.loads(token_data)
+                
+                creds = Credentials(
+                    token=token_data['token'],
+                    refresh_token=token_data.get('refresh_token'),
+                    token_uri=token_data['token_uri'],
+                    client_id=token_data['client_id'],
+                    client_secret=token_data['client_secret'],
+                    scopes=token_data['scopes']
+                )
+                print("✅ Loaded credentials from Streamlit secrets")
+        except (ImportError, KeyError, Exception) as e:
+            print(f"⚠️ Could not load from Streamlit secrets: {e}")
+            
+            # Fallback to local token file
+            print(f"🔍 Checking for existing token at: {self.token_path}")
+            if os.path.exists(self.token_path):
+                print("✅ Found existing token file, loading...")
+                creds = Credentials.from_authorized_user_file(self.token_path, self.SCOPES)
+            else:
+                print("❌ No existing token file found")
         
         # Refresh or get new token
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 print("🔄 Refreshing expired token...")
-                creds.refresh(Request())
-                print("✅ Token refreshed successfully")
-            else:
-                print("🌐 Starting OAuth flow...")
-                print("📱 A browser window will open for authorization")
-                print("🔗 If browser doesn't open, copy the URL that appears")
-                
-                # Create client config for OAuth flow
-                client_config = {
-                    "installed": {
-                        "client_id": self.client_id,
-                        "client_secret": self.client_secret,
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": ["http://localhost:8080/", "urn:ietf:wg:oauth:2.0:oob"]
-                    }
-                }
-                flow = InstalledAppFlow.from_client_config(client_config, self.SCOPES)
-                
                 try:
-                    print("🚀 Starting local server on port 8080...")
-                    # Try different approaches for OAuth
+                    creds.refresh(Request())
+                    print("✅ Token refreshed successfully")
+                    
+                    # Save refreshed token locally if possible
                     try:
-                        creds = flow.run_local_server(port=8080, open_browser=True, access_type='offline', prompt='consent')
-                    except Exception as local_server_error:
-                        print(f"⚠️  Local server failed: {local_server_error}")
-                        print("🔄 Trying console-based OAuth flow...")
-                        creds = flow.run_console(access_type='offline', prompt='consent')
-                    print("✅ OAuth flow completed successfully!")
-                except Exception as e:
-                    print(f"❌ OAuth flow failed: {str(e)}")
-                    print("💡 Make sure port 8080 is available and redirect URI is configured correctly")
-                    raise
+                        with open(self.token_path, 'w') as token:
+                            token.write(creds.to_json())
+                        print("💾 Refreshed credentials saved locally")
+                    except Exception as save_error:
+                        print(f"⚠️ Could not save refreshed token locally: {save_error}")
+                        
+                except Exception as refresh_error:
+                    print(f"❌ Token refresh failed: {refresh_error}")
+                    creds = None
             
-            # Save credentials
-            print("💾 Saving credentials to token file...")
-            with open(self.token_path, 'w') as token:
-                token.write(creds.to_json())
-            print("✅ Credentials saved successfully")
+            if not creds or not creds.valid:
+                # In production, provide clear instructions
+                error_msg = (
+                    "🚨 OAuth credentials required for production deployment.\n\n"
+                    "To fix this:\n"
+                    "1. Run 'python3 setup_production_token.py' locally\n"
+                    "2. Copy the generated token JSON\n"
+                    "3. In Streamlit Cloud, add secret: GOOGLE_TOKEN_JSON\n"
+                    "4. Paste the token JSON as the secret value\n"
+                    "5. Reboot your Streamlit app\n\n"
+                    "The token must include a valid refresh_token for automatic renewal."
+                )
+                print(error_msg)
+                raise Exception(error_msg)
         
         self._creds = creds
         return creds
