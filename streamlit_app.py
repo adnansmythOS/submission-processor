@@ -453,10 +453,24 @@ def show_sidebar():
         st.markdown("### ⚙️ Configuration")
         
         # Check token status
-        token_path = os.getenv('GOOGLE_TOKEN_PATH', 'token.json')
-        if os.path.exists(token_path):
-            st.success("✅ OAuth token found")
-        else:
+        token_found = False
+        
+        # Check Streamlit secrets first (production)
+        try:
+            if hasattr(st, 'secrets') and 'GOOGLE_TOKEN_JSON' in st.secrets:
+                token_found = True
+                st.success("✅ OAuth token found (Streamlit secrets)")
+        except:
+            pass
+        
+        # Check local token file (development)
+        if not token_found:
+            token_path = os.getenv('GOOGLE_TOKEN_PATH', 'token.json')
+            if os.path.exists(token_path):
+                token_found = True
+                st.success("✅ OAuth token found (local file)")
+        
+        if not token_found:
             st.warning("⚠️ OAuth token not found")
         
         # Environment status
